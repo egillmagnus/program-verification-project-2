@@ -181,6 +181,9 @@ method append_nogrow(arr: Ref, val: Int)
     ensures acc(dyn_array(arr))
     ensures arr_length(arr) == old(arr_length(arr)) + 1
     ensures arr_capacity(arr) == old(arr_capacity(arr))
+    // TODO: Full functional correctness would require:
+    // ensures arr_contents(arr) == old(arr_contents(arr)) ++ Seq(val)
+    // This needs lemmas about arr_contents_helper to prove
 {
     consume_time_credit() 
     
@@ -188,8 +191,9 @@ method append_nogrow(arr: Ref, val: Int)
     var old_len: Int := arr_length(arr)
     
     unfold acc(dyn_array(arr))
+    var arr_array: StaticArray := arr.array
     
-    update(arr.array, arr.length, val) // append value
+    update(arr_array, arr.length, val) // append value
     arr.length := arr.length + 1 // we appended an element
     
     // Save one time credit for future grow operation
@@ -220,7 +224,9 @@ method grow(arr: Ref) returns (new_arr: Ref)
     ensures acc(dyn_array(new_arr))
     ensures arr_length(new_arr) == old(arr_length(arr))
     ensures arr_capacity(new_arr) == 2 * old(arr_capacity(arr))
-    // TODO: prove arr_contents(new_arr) == old(arr_contents(arr))
+    // TODO: Full functional correctness would require:
+    // ensures arr_contents(new_arr) == old(arr_contents(arr))
+    // This needs lemmas about arr_contents_helper to prove copied elements match
 {
     consume_time_credit() // we must spend a credit for the call
     
@@ -261,7 +267,7 @@ method grow(arr: Ref) returns (new_arr: Ref)
         invariant acc(time_credit(), old_arr_credits/1)
         invariant acc(arr.length) && acc(arr.capacity) && acc(arr.array) && acc(arr.credits)
         invariant arr.array == old_static_arr
-        // Elements copied so far match
+        // Elements copied so far match exactly
         invariant forall i: Int :: {loc(new_static_arr, i)} 0 <= i && i < pos ==> 
             lookup(new_static_arr, i) == lookup(old_static_arr, i)
     {
@@ -286,6 +292,9 @@ method grow(arr: Ref) returns (new_arr: Ref)
     
     // Fold the new array predicate
     fold acc(dyn_array(new_arr))
+    
+    // Note: Full functional correctness (arr_contents preservation) would require
+    // lemmas about arr_contents_helper to prove the copied elements match
 }
 // -----------------------------------------
 
@@ -316,7 +325,6 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
         // The invariant of dyn_array guarantees arr_credits(arr) >= arr_length(arr)
         new_arr := grow(arr)
         
-        var new_contents: Seq[Int] := arr_contents(new_arr)
         unfold acc(dyn_array(new_arr))
         
         // Now we have permission to the static array elements
