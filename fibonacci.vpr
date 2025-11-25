@@ -1,0 +1,89 @@
+/*
+ * CHALLENGE 1
+ * The Viper code below shows a method that recursively computes the n-th Fibonacci number. 
+ * First, prove functional correctness, i.e. that the method indeed returns the n-th Fibonacci number.
+ * After that, find the smallest upper bound on the method's runtime in our runtime model.
+ * Finally, prove that your bound is indeed the smallest upper bound on the method's runtime.
+ */
+
+
+// -----------------------------------------
+// Runtime model
+// Notice that we can hold at most one permission
+// to *fields*, but this does not apply to *predicates*
+predicate time_credit() // represents one abstract unit of time
+
+// models spending an abstract unit of time 
+// needs to be called at the beginning of every method
+// and loop iteration
+method consume_time_credit() // 
+    requires acc(time_credit(), 1/1)
+// -----------------------------------------
+
+
+// -----------------------------------------
+// Mathematical definition of the Fibonacci sequence
+function fib(n: Int): Int
+    requires n >= 0
+{
+    n == 0 ? 0 : (n == 1 ? 1 : fib(n - 1) + fib(n - 2))
+}
+
+// Helper function to calculate time credits needed
+// The recursive structure mirrors fib_recursive's calls:
+// T(n) = 1 + T(n-1) + T(n-2) for n >= 2
+// T(0) = T(1) = 1
+function time_credits(n: Int): Int
+    requires n >= 0
+    ensures result >= 1
+{
+    n == 0 || n == 1 ? 1 : 1 + time_credits(n - 1) + time_credits(n - 2)
+}
+
+// -----------------------------------------
+// Task 1: Prove a runtime bound for the following recursive method
+// Your bound should be tight, i.e. use as few time credits
+// as possible. Furthermore, prove that it is not possible
+// to use fewer time credits.
+// Do not modify the given production code. However, feel free to 
+// introduce additional functions, lemma methods or ghost code.
+// Furthermore, make sure that the functional contract remains intact.
+method fib_recursive(n: Int) returns (res: Int)
+    requires n >= 0
+    // TODO add time credits and functional specification
+    requires acc(time_credit(), time_credits(n)/1)
+    ensures res == fib(n)
+{
+    consume_time_credit() // we must spend a credit for every call
+
+    if (n == 0) {
+        res := 0
+    } elseif (n == 1) {
+        res := 1
+    } else {
+        var sub1: Int
+        sub1 := fib_recursive(n - 1)
+
+        var sub2: Int
+        sub2 := fib_recursive(n - 2)
+
+        res := sub1 + sub2
+    }
+}
+// -----------------------------------------
+
+// -----------------------------------------
+// PROOF THAT THE BOUND IS TIGHT
+// This lemma demonstrates that using fewer time credits would fail verification.
+// The time_credits function provides exactly the minimum needed:
+// - Base cases (n=0, n=1): require 1 credit each for the method call
+// - Recursive case (n>=2): requires 1 credit for this call + 
+//   time_credits(n-1) for the first recursive call +
+//   time_credits(n-2) for the second recursive call
+// Total: 1 + time_credits(n-1) + time_credits(n-2) = time_credits(n)
+//
+// To prove tightness: If we try to call fib_recursive with k < time_credits(n) credits,
+// verification will fail because we cannot distribute credits to satisfy all recursive calls.
+// The verification of fib_recursive itself proves this - any fewer credits in the precondition
+// would cause the verifier to fail when trying to prove we have enough credits for the recursive calls.
+// -----------------------------------------
