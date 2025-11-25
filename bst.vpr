@@ -50,22 +50,126 @@ function min(a : Int, b : Int) : Int
 // TASK 4.1: Define a predicate for binary search trees and individual BST nodes.
 // You may define additional fields, predicates, arguments or heap-based functions.
 
+// Helper functions to get min and max values in a subtree
+function tree_min(node: Ref): Int
+    requires node != null
+    requires acc(bst_node(node))
+{
+    unfolding acc(bst_node(node)) in (
+        node.left == null ? node.elem : min(node.elem, tree_min(node.left))
+    )
+}
+
+function tree_max(node: Ref): Int
+    requires node != null
+    requires acc(bst_node(node))
+{
+    unfolding acc(bst_node(node)) in (
+        node.right == null ? node.elem : max(node.elem, tree_max(node.right))
+    )
+}
+
 // The whole tree has just a reference to the root
 // The empty tree is represented by self.root == null
-predicate bst(self: Ref) // TODO
+predicate bst(self: Ref) {
+    acc(self.root) &&
+    (self.root != null ==> acc(bst_node(self.root)))
+}
 
 // A single BST node. Apart from field permissions, the current value
 // must be greater than the largest value in the left subtree and
 // smaller than the smallest value in the right subtree.
-predicate bst_node(self: Ref) // TODO
+predicate bst_node(self: Ref) {
+    acc(self.elem) && acc(self.left) && acc(self.right) &&
+    
+    // Left subtree: either null or valid BST node with max < current
+    (self.left != null ==> 
+        acc(bst_node(self.left)) && tree_max(self.left) < self.elem) &&
+    
+    // Right subtree: either null or valid BST node with min > current
+    (self.right != null ==> 
+        acc(bst_node(self.right)) && tree_min(self.right) > self.elem)
+}
 // -----------------------------------------
 
 
 // -----------------------------------------
 // TASK 4.2 - 4.4: implement and verify this method
 method bst_insert(tree: Ref, val: Int)
-    requires bst(tree)
-    // TODO
+    requires acc(bst(tree))
+    requires acc(time_credit(), (1 + height(tree))/1)
+    ensures acc(bst(tree))
+    ensures to_set(tree) == old(to_set(tree)) union Set(val)
+{
+    consume_time_credit()
+    
+    unfold acc(bst(tree))
+    
+    if (tree.root == null) {
+        // Empty tree - create new root node
+        var new_node: Ref
+        new_node := new(elem, left, right)
+        new_node.elem := val
+        new_node.left := null
+        new_node.right := null
+        fold acc(bst_node(new_node))
+        tree.root := new_node
+    } else {
+        // Non-empty tree - insert into existing tree
+        bst_insert_helper(tree.root, val)
+    }
+    
+    fold acc(bst(tree))
+}
+
+// Helper method to insert into a non-null BST node
+method bst_insert_helper(node: Ref, val: Int)
+    requires node != null
+    requires acc(bst_node(node))
+    requires acc(time_credit(), node_height(node)/1)
+    ensures acc(bst_node(node))
+    // Preserve min/max bounds
+    ensures tree_min(node) == old(tree_min(node)) || tree_min(node) == val
+    ensures tree_max(node) == old(tree_max(node)) || tree_max(node) == val
+    // Value set preservation
+    ensures node_to_set(node) == old(node_to_set(node)) union Set(val)
+{
+    consume_time_credit()
+    
+    unfold acc(bst_node(node))
+    
+    if (val < node.elem) {
+        // Insert into left subtree
+        if (node.left == null) {
+            var new_node: Ref
+            new_node := new(elem, left, right)
+            new_node.elem := val
+            new_node.left := null
+            new_node.right := null
+            fold acc(bst_node(new_node))
+            node.left := new_node
+        } else {
+            bst_insert_helper(node.left, val)
+        }
+    } elseif (val > node.elem) {
+        // Insert into right subtree
+        if (node.right == null) {
+            var new_node: Ref
+            new_node := new(elem, left, right)
+            new_node.elem := val
+            new_node.left := null
+            new_node.right := null
+            fold acc(bst_node(new_node))
+            node.right := new_node
+        } else {
+            bst_insert_helper(node.right, val)
+        }
+    } else {
+        // val == node.elem, do nothing (no duplicates)
+    }
+    
+    fold acc(bst_node(node))
+}
 // -----------------------------------------
 
 
@@ -73,14 +177,48 @@ method bst_insert(tree: Ref, val: Int)
 // -----------------------------------------
 // Auxiliary definition of the height of a tree
 function height(tree: Ref) : Int
-    requires bst(tree)
-    // TODO: define for TASK 4.3
+    requires acc(bst(tree))
+    ensures result >= 0
+{
+    unfolding acc(bst(tree)) in (
+        tree.root == null ? 0 : 1 + node_height(tree.root)
+    )
+}
+
+function node_height(node: Ref): Int
+    requires node != null
+    requires acc(bst_node(node))
+    ensures result >= 1
+{
+    unfolding acc(bst_node(node)) in (
+        1 + max(
+            node.left == null ? 0 : node_height(node.left),
+            node.right == null ? 0 : node_height(node.right)
+        )
+    )
+}
 // -----------------------------------------
 
 // -----------------------------------------
 // Auxiliary function mapping every BST
 // to the set of values it stores.
 function to_set(tree: Ref): Set[Int]
-    // TODO: define for TASK 4.4
+    requires acc(bst(tree))
+{
+    unfolding acc(bst(tree)) in (
+        tree.root == null ? Set[Int]() : node_to_set(tree.root)
+    )
+}
+
+function node_to_set(node: Ref): Set[Int]
+    requires node != null
+    requires acc(bst_node(node))
+{
+    unfolding acc(bst_node(node)) in (
+        Set(node.elem) union
+        (node.left == null ? Set[Int]() : node_to_set(node.left)) union
+        (node.right == null ? Set[Int]() : node_to_set(node.right))
+    )
+}
 // -----------------------------------------
 
