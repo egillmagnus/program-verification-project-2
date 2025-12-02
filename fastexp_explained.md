@@ -451,6 +451,137 @@ Total credits: 1 + 4 = 5 ✓
 
 ---
 
+## Deep Dive: The Permission System
+
+Fast exponentiation primarily uses `time_credit()` permissions. Let's understand how permissions work here.
+
+### Permissions in Viper
+
+Every memory access in Viper requires **permission**. For fields like `x.f`, you need `acc(x.f)`. For abstract predicates like `time_credit()`, you need `acc(time_credit())`.
+
+**Key principle**: Permissions must be **accounted for** - you can't create them from nothing, and if you give them away, you don't have them anymore.
+
+### Permission Fractions and Multiple Instances
+
+```viper
+requires acc(time_credit(), (1 + iterations_needed(e))/1)
+```
+
+**Breaking this down:**
+- `acc(resource, amount)` - access permission with a fractional amount
+- `time_credit()` - the abstract predicate (no body, just a token)
+- `(1 + iterations_needed(e))/1` - the fraction
+
+**What does the fraction mean?**
+- For **fields**: fractions between 0 and 1 (e.g., 1/2 for shared read access)
+- For **abstract predicates**: can exceed 1 - represents multiple instances
+- `5/1` means "5 full units" of the predicate
+- `(1 + iterations_needed(e))/1` means "1 + iterations_needed(e)" instances of time_credit
+
+### Permission Flow Through fast_pow
+
+```viper
+method fast_pow(n: Int, e: Int) returns (res: Int)
+    requires acc(time_credit(), (1 + iterations_needed(e))/1)  // START with these
+{
+    consume_time_credit()  // (1) Use 1 credit
+    // Now have: iterations_needed(e) credits remaining
+    
+    while (y > 0)
+        invariant y > 0 ==> acc(time_credit(), iterations_needed(y)/1)
+    {
+        consume_time_credit()  // (2) Use 1 credit per iteration
+        // Remaining credits decrease each iteration
+        y := y / 2
+        b := b * b
+    }
+    // At end: y = 0, no credits required
+}
+```
+
+**Permission accounting:**
+```
+Initial:    1 + iterations_needed(e) credits
+After (1):  iterations_needed(e) credits
+After loop: 0 credits (all consumed)
+```
+
+### How Permissions Decrease in the Loop
+
+Consider `fast_pow(2, 13)`:
+
+```
+Start:       1 + iterations_needed(13) = 1 + 4 = 5 credits
+Consume 1:   4 credits left = iterations_needed(13)
+Iteration 1: consume 1, y: 13 → 6, need iterations_needed(6) = 3
+Iteration 2: consume 1, y: 6 → 3, need iterations_needed(3) = 2
+Iteration 3: consume 1, y: 3 → 1, need iterations_needed(1) = 1
+Iteration 4: consume 1, y: 1 → 0, need 0 (loop exits)
+Total used: 5 credits ✓
+```
+
+The invariant `y > 0 ==> acc(time_credit(), iterations_needed(y)/1)` perfectly tracks this!
+
+### Why the Conditional Permission?
+
+```viper
+invariant y > 0 ==> acc(time_credit(), iterations_needed(y)/1)
+```
+
+**The implication (==>) is crucial!**
+
+When `y = 0`:
+- Loop condition `y > 0` is false, so loop exits
+- Invariant becomes: `false ==> acc(...)` which is trivially true
+- We don't need to hold any credits (we've used them all)
+
+When `y > 0`:
+- Loop will iterate at least once more
+- Must hold `iterations_needed(y)` credits for remaining iterations
+
+**Why not just `acc(time_credit(), iterations_needed(y)/1)`?**
+- `iterations_needed(y)` requires `y > 0` (precondition!)
+- When `y = 0`, calling `iterations_needed(0)` violates its precondition
+- The implication guards against this
+
+### Permission Transfer to consume_time_credit
+
+```viper
+method consume_time_credit()
+    requires acc(time_credit(), 1/1)  // Takes exactly 1 credit
+    // No postcondition - credit is "spent"
+```
+
+When we call `consume_time_credit()`:
+1. We must prove we have at least 1 credit
+2. That credit is transferred to the method
+3. The method doesn't return it (no `ensures acc(...)`)
+4. The credit is "consumed" - permanently gone
+
+### No fold/unfold for Abstract Predicates
+
+`time_credit()` is an **abstract predicate** (no body):
+
+```viper
+predicate time_credit()  // Just declared, nothing inside
+```
+
+**Implications:**
+- Cannot `unfold` it (nothing to unfold)
+- Cannot `fold` it (nothing to fold)
+- Just tracked as a permission token
+- Used for resource counting, not data structure abstraction
+
+**Contrast with concrete predicates:**
+```viper
+predicate dyn_array(self: Ref) {
+    acc(self.length) && ...  // Has a body!
+}
+```
+Concrete predicates CAN be folded/unfolded to access their contents.
+
+---
+
 ## Summary of Key Viper Concepts
 
 | Concept | Syntax | Example |

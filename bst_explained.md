@@ -174,6 +174,13 @@ function tree_max(node: Ref): Int
 }
 ```
 
+**Permission explanation for `unfolding acc(bst_node(node)) in (...)`**:
+- **Before**: We have `acc(bst_node(node))` from the precondition
+- **During `unfolding`**: Temporarily gain access to `node.elem`, `node.left`, `node.right`, and if `node.left != null`, also `acc(bst_node(node.left))`
+- **Why needed**: Can't read `node.elem` or `node.left` without unfolding first
+- **After expression**: Permissions automatically "re-fold" - we still have `acc(bst_node(node))`
+- **Why `unfolding...in` not `unfold`**: Functions must be pure (no side effects), so we use the expression form
+
 **Logic**:
 - If no left child: this node has the minimum value
 - Otherwise: minimum is min of this node and left subtree's minimum
@@ -196,6 +203,11 @@ function tree_max(node: Ref): Int
     )
 }
 ```
+
+**Permission explanation for `unfolding acc(bst_node(node)) in (...)`**:
+- **Before**: Have `acc(bst_node(node))` from precondition
+- **During `unfolding`**: Temporarily access `node.elem`, `node.right`, and if `node.right != null`, also `acc(bst_node(node.right))` for the recursive call
+- **After**: Permissions restored to `acc(bst_node(node))`
 
 **Logic**: Symmetric to tree_min but for right subtree.
 
@@ -337,7 +349,11 @@ method bst_insert(tree: Ref, val: Int)
 
 ### Line 103: `unfold acc(bst(tree))`
 
-**Purpose**: Open the bst predicate to access tree.root.
+**Permission explanation**:
+- **Before**: Have `acc(bst(tree))` from precondition
+- **After unfold**: Gain `acc(tree.root)` and if `tree.root != null`, also `acc(bst_node(tree.root))`
+- **Lost**: `acc(bst(tree))` - must `fold` it back before method returns
+- **Why needed**: Cannot read or write `tree.root` without permission to it
 
 ### Lines 105-113: Empty Tree Case
 
@@ -361,10 +377,15 @@ method bst_insert(tree: Ref, val: Int)
 
 ### Line 112: `fold acc(bst_node(new_node))`
 
-**Purpose**:
-- Before fold: have permissions to fields, null children
-- After fold: have bst_node predicate
-- Must satisfy predicate body (trivially satisfied - no children)
+**Permission explanation**:
+- **Before fold**: Have `acc(new_node.elem)`, `acc(new_node.left)`, `acc(new_node.right)` from `new()`
+- **Verification obligation**: Must prove predicate body holds:
+  - Have all three field permissions? ✓ (from `new()`)
+  - `new_node.left == null`, so left child clause is trivially true
+  - `new_node.right == null`, so right child clause is trivially true
+  - BST property: vacuously satisfied (no children)
+- **After fold**: Have `acc(bst_node(new_node))`, lost individual field permissions
+- **Why fold here**: Need `acc(bst_node(new_node))` to assign to `tree.root` and later fold `bst(tree)`
 
 ### Lines 114-116: Non-empty Tree Case
 
@@ -378,7 +399,14 @@ method bst_insert(tree: Ref, val: Int)
 
 ### Line 119: `fold acc(bst(tree))`
 
-**Purpose**: Re-package as bst predicate.
+**Permission explanation**:
+- **Before fold**: Have `acc(tree.root)` and `acc(bst_node(tree.root))` (if root != null)
+- **Verification obligation**: Must prove bst predicate body:
+  - Have `acc(tree.root)`? ✓
+  - `tree.root != null ==> acc(bst_node(tree.root))`? ✓ (either root is null, or we have the predicate)
+- **After fold**: Have `acc(bst(tree))` as required by postcondition
+- **Lost**: Direct access to `tree.root` and node predicates
+- **Why fold here**: Method postcondition requires returning `acc(bst(tree))`
 
 ---
 
@@ -455,6 +483,17 @@ method bst_insert_helper(node: Ref, val: Int)
 
 **Purpose**: Functional correctness - value is added to set.
 
+### Line 136: `unfold acc(bst_node(node))`
+
+**Permission explanation**:
+- **Before unfold**: Have `acc(bst_node(node))` from precondition
+- **After unfold**: Gain:
+  - `acc(node.elem)`, `acc(node.left)`, `acc(node.right)` - can now read/write these fields
+  - If `node.left != null`: `acc(bst_node(node.left))` - can recurse or pass to recursive call
+  - If `node.right != null`: `acc(bst_node(node.right))` - same
+- **Lost**: `acc(bst_node(node))` - must `fold` it back before returning
+- **Why needed**: Cannot read `node.elem` to compare with `val`, or access children
+
 ### Lines 138-149: Insert Left Case
 
 ```viper
@@ -475,6 +514,16 @@ method bst_insert_helper(node: Ref, val: Int)
     }
 ```
 
+**Permission explanation for `fold acc(bst_node(new_node))`** (line 147):
+- **Before fold**: Have `acc(new_node.elem)`, `acc(new_node.left)`, `acc(new_node.right)` from `new()`
+- **Verification obligation**: Prove new_node satisfies BST property (trivial - no children)
+- **After fold**: Have `acc(bst_node(new_node))`
+- **Why fold here**: After `node.left := new_node`, we need `acc(bst_node(node.left))` for the outer `fold acc(bst_node(node))`
+
+**Permission note for recursive call** (line 149):
+- Requires `acc(bst_node(node.left))` - we have this from the earlier `unfold acc(bst_node(node))`
+- Returns `acc(bst_node(node.left))` - needed for the outer `fold`
+
 **BST Logic**:
 - `val < node.elem` → insert in left subtree
 - If no left child → create one
@@ -483,6 +532,10 @@ method bst_insert_helper(node: Ref, val: Int)
 ### Lines 150-162: Insert Right Case
 
 Symmetric to left case, for `val > node.elem`.
+
+**Permission explanation for `fold acc(bst_node(new_node))`** (in right case):
+- Same as left case: fold newly created node before linking
+- After `node.right := new_node`, we have `acc(bst_node(node.right))` for the outer fold
 
 ### Lines 163-165: Equal Case
 
@@ -496,10 +549,18 @@ Symmetric to left case, for `val > node.elem`.
 
 ### Line 167: `fold acc(bst_node(node))`
 
-**Purpose**: 
-- Re-establish bst_node predicate
-- Verifier must prove BST property still holds
-- The postconditions about tree_min/tree_max help here
+**Permission explanation**:
+- **Before fold**: Have `acc(node.elem)`, `acc(node.left)`, `acc(node.right)` from earlier unfold
+  - If `node.left != null`: have `acc(bst_node(node.left))` (either from unfold or from recursive call/new node)
+  - If `node.right != null`: have `acc(bst_node(node.right))` (same)
+- **Verification obligation**: Must prove:
+  1. Have all field permissions ✓
+  2. Have child predicates where needed ✓
+  3. **BST property**: `tree_max(node.left) < node.elem` and `tree_min(node.right) > node.elem`
+     - For new nodes: `val < node.elem` guarantees left property, `val > node.elem` guarantees right
+     - For recursive cases: postconditions `tree_min/tree_max == old(...) || == val` help prove this
+- **After fold**: Have `acc(bst_node(node))` as required by postcondition
+- **Why fold here**: Method must return `acc(bst_node(node))` per postcondition
 
 ---
 
@@ -550,6 +611,12 @@ function node_height(node: Ref): Int
 }
 ```
 
+**Permission explanation for `unfolding acc(bst(tree)) in (...)`**:
+- **Before**: Have `acc(bst(tree))` from precondition
+- **During unfolding**: Temporarily gain `acc(tree.root)` to read it, and if `tree.root != null`, also `acc(bst_node(tree.root))` to call `node_height`
+- **After**: Permissions restored to `acc(bst(tree))`
+- **Why needed**: Can't read `tree.root` or call `node_height(tree.root)` without these permissions
+
 **Logic**:
 - Empty tree (root == null): height 0
 - Non-empty: 1 + height of root node
@@ -574,6 +641,14 @@ function node_height(node: Ref): Int
     )
 }
 ```
+
+**Permission explanation for `unfolding acc(bst_node(node)) in (...)`**:
+- **Before**: Have `acc(bst_node(node))` from precondition
+- **During unfolding**: Temporarily gain:
+  - `acc(node.left)`, `acc(node.right)` to read the child pointers
+  - If `node.left != null`: `acc(bst_node(node.left))` for recursive call
+  - If `node.right != null`: `acc(bst_node(node.right))` for recursive call
+- **After**: Permissions restored to `acc(bst_node(node))`
 
 **Logic**:
 - Height = 1 + max(left height, right height)
@@ -626,6 +701,11 @@ function node_to_set(node: Ref): Set[Int]
 }
 ```
 
+**Permission explanation for `unfolding acc(bst(tree)) in (...)`**:
+- **Before**: Have `acc(bst(tree))` from precondition
+- **During unfolding**: Temporarily gain `acc(tree.root)` to read it, and `acc(bst_node(tree.root))` for the `node_to_set` call
+- **After**: Permissions restored to `acc(bst(tree))`
+
 **Logic**:
 - Empty tree → empty set
 - Non-empty → set from root node
@@ -646,11 +726,268 @@ function node_to_set(node: Ref): Set[Int]
 }
 ```
 
+**Permission explanation for `unfolding acc(bst_node(node)) in (...)`**:
+- **Before**: Have `acc(bst_node(node))` from precondition
+- **During unfolding**: Temporarily gain:
+  - `acc(node.elem)` to read the value
+  - `acc(node.left)`, `acc(node.right)` to check if children exist
+  - `acc(bst_node(node.left))` and `acc(bst_node(node.right))` for recursive calls
+- **After**: Permissions restored to `acc(bst_node(node))`
+
 **Viper Syntax**:
 - `Set(value)` creates singleton set
 - `union` is set union
 
 **Logic**: Set = {this value} ∪ left subtree set ∪ right subtree set
+
+---
+
+## Deep Dive: The Permission System and fold/unfold/unfolding
+
+The BST example heavily uses Viper's permission system. Let's understand it deeply.
+
+### What Are Permissions?
+
+In Viper, **you cannot access memory without permission**. This is fundamental:
+
+```viper
+// ILLEGAL without permission:
+x := self.elem          // Cannot read self.elem
+self.left := new_node   // Cannot write self.left
+
+// LEGAL only after obtaining permission:
+unfold acc(bst_node(self))   // Now we have permission!
+x := self.elem               // OK
+self.left := new_node        // OK
+```
+
+**Why?** This prevents:
+- Data races (in concurrent extensions)
+- Aliasing bugs  
+- Use-after-free errors
+- The verifier from getting confused about what values are
+
+### Predicates Hide Permissions
+
+A predicate is a **bundle of permissions with a name**:
+
+```viper
+predicate bst_node(self: Ref) {
+    acc(self.elem) &&           // ← Permission to elem field
+    acc(self.left) &&           // ← Permission to left field  
+    acc(self.right) &&          // ← Permission to right field
+    (self.left != null ==> 
+        acc(bst_node(self.left)) ...)  // ← Recursively, permission to left subtree!
+}
+```
+
+When you have `acc(bst_node(node))`:
+- You **cannot** directly access `node.elem`, `node.left`, `node.right`
+- You **know** those permissions are "inside" the predicate
+- You must **unfold** to get them out
+
+Think of it like a locked box:
+- `acc(bst_node(node))` = you have the locked box
+- `unfold` = open the box, take out the permissions
+- `fold` = put permissions back in the box, lock it
+
+### What `unfold` Does
+
+```viper
+method example(node: Ref)
+    requires acc(bst_node(node))  // We START with the predicate
+{
+    // HERE: Have acc(bst_node(node)), but NOT acc(node.elem)!
+    
+    unfold acc(bst_node(node))
+    
+    // NOW: Have acc(node.elem), acc(node.left), acc(node.right)
+    //      And maybe acc(bst_node(node.left)) if node.left != null
+    // But we NO LONGER have acc(bst_node(node))!
+    
+    var x: Int := node.elem  // OK - we have permission now
+}
+```
+
+**Permission accounting with unfold:**
+```
+BEFORE unfold:                    AFTER unfold:
+  acc(bst_node(node))      →        acc(node.elem)
+                                    acc(node.left)
+                                    acc(node.right)
+                                    (node.left != null ==> acc(bst_node(node.left)))
+                                    (node.right != null ==> acc(bst_node(node.right)))
+                                    + BST property knowledge!
+```
+
+### What `fold` Does
+
+`fold` is the **reverse** of unfold:
+
+```viper
+method example()
+{
+    var new_node: Ref
+    new_node := new(elem, left, right)    // Creates permissions
+    new_node.elem := 5
+    new_node.left := null
+    new_node.right := null
+    
+    // NOW: Have acc(new_node.elem), acc(new_node.left), acc(new_node.right)
+    
+    fold acc(bst_node(new_node))
+    
+    // NOW: Have acc(bst_node(new_node))
+    // Lost: Individual field permissions
+}
+```
+
+**Permission accounting with fold:**
+```
+BEFORE fold:                      AFTER fold:
+  acc(node.elem)            →       acc(bst_node(node))
+  acc(node.left)
+  acc(node.right)
+  (+ child predicates if needed)
+```
+
+**Critical: fold requires PROVING the predicate body!**
+
+```viper
+fold acc(bst_node(node))  // Verifier must prove:
+                          //   1. We have acc(node.elem), acc(node.left), acc(node.right)
+                          //   2. If node.left != null: we have acc(bst_node(node.left))
+                          //                            AND tree_max(node.left) < node.elem
+                          //   3. If node.right != null: we have acc(bst_node(node.right))
+                          //                             AND tree_min(node.right) > node.elem
+```
+
+This is how **BST property is verified** - fold won't succeed unless the BST property holds!
+
+### What `unfolding P in E` Does
+
+This is for **functions** (which can't have side effects):
+
+```viper
+function tree_min(node: Ref): Int
+    requires acc(bst_node(node))
+{
+    unfolding acc(bst_node(node)) in (
+        // Inside here: temporarily have the unfolded permissions
+        node.left == null ? node.elem : min(node.elem, tree_min(node.left))
+    )
+    // After: permissions are "re-folded" automatically
+}
+```
+
+**Why `unfolding...in` instead of `unfold`?**
+- `unfold` is a **statement** (imperative, has effect)
+- `unfolding...in` is an **expression** (pure, no side effects)
+- Functions must be pure, so they use `unfolding...in`
+
+Think of it as: "**temporarily** open the box to peek inside, then automatically close it"
+
+### Permission Flow Example: bst_insert_helper
+
+Let's trace the full permission flow:
+
+```viper
+method bst_insert_helper(node: Ref, val: Int)
+    requires acc(bst_node(node))           // (1) START: have predicate
+    ensures acc(bst_node(node))            // (7) END: must return predicate
+{
+    unfold acc(bst_node(node))              // (2) Open: get field permissions
+    
+    // (3) Now have: acc(node.elem), acc(node.left), acc(node.right)
+    //              + child predicates if children exist
+    
+    if (val < node.elem) {
+        if (node.left == null) {
+            // (4a) Create new node, gives us acc(new_node.elem), etc.
+            var new_node: Ref
+            new_node := new(elem, left, right)
+            new_node.elem := val
+            new_node.left := null  
+            new_node.right := null
+            
+            fold acc(bst_node(new_node))    // (5a) Package new node
+            // Requires proving: new node satisfies BST property (trivial - no children)
+            
+            node.left := new_node           // (5b) Link it
+            // Now we have acc(bst_node(node.left)) where node.left = new_node
+            
+        } else {
+            // (4b) Recurse - give away acc(bst_node(node.left)), get it back
+            bst_insert_helper(node.left, val)
+            // Post: still have acc(bst_node(node.left))
+        }
+    }
+    // ... similar for right case ...
+    
+    fold acc(bst_node(node))                // (6) Close: return predicate
+    // Must prove:
+    //   - Have all field permissions ✓
+    //   - Have child predicates ✓
+    //   - BST property: tree_max(node.left) < node.elem ✓
+    //                   tree_min(node.right) > node.elem ✓
+}
+```
+
+### Why fold Can Fail (and How to Fix It)
+
+```viper
+method broken_insert(node: Ref)
+    requires acc(bst_node(node))
+{
+    unfold acc(bst_node(node))
+    node.left := node.right    // Break the BST property!
+    fold acc(bst_node(node))   // FAILS! Can't prove tree_max(left) < elem
+}
+```
+
+The verifier will reject this because after the assignment:
+- `node.left` might point to subtree with values > node.elem
+- BST property is violated
+- `fold` requires proving the predicate body, which includes BST property
+
+### Recursive Predicates and Permissions
+
+```viper
+predicate bst_node(self: Ref) {
+    acc(self.elem) && acc(self.left) && acc(self.right) &&
+    (self.left != null ==> acc(bst_node(self.left)) && ...) &&
+    (self.right != null ==> acc(bst_node(self.right)) && ...)
+}
+```
+
+**Key insight**: `acc(bst_node(node))` gives you permission to the **entire subtree**!
+
+When you unfold at the root:
+- Get permission to root's fields
+- Get `acc(bst_node(root.left))` and `acc(bst_node(root.right))`
+- Those predicates contain permissions to their subtrees
+- And so on recursively
+
+This is how Viper handles **tree ownership** - one predicate owns the whole tree.
+
+### Why Permissions Matter for BST Verification
+
+1. **No aliasing confusion**: 
+   - Can't have two predicates claiming same node
+   - Verifier knows exactly what each node's value is
+
+2. **BST property checked at fold**:
+   - Every `fold acc(bst_node(x))` proves ordering property
+   - Can't "sneak in" a bad modification
+
+3. **Frame problem solved**:
+   - Other parts of heap are unchanged
+   - Only touched what we have permission to
+
+4. **Termination hints**:
+   - Recursive function needs permission to recurse
+   - `unfolding` gives permission to children
+   - Can't infinitely recurse without infinite permissions
 
 ---
 

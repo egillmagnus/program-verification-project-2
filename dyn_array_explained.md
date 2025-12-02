@@ -350,10 +350,11 @@ function arr_credits(base: Ref): Int
 
 ### Line 99: `{ unfolding acc(dyn_array(base)) in base.length }`
 
-**Viper Syntax**:
-- `unfolding acc(predicate) in expression` temporarily unfolds a predicate
-- During evaluation of `expression`, the predicate body is accessible
-- Predicate is automatically re-folded after
+**Permission explanation for `unfolding acc(dyn_array(base)) in base.length`**:
+- **Before**: Have `acc(dyn_array(base))` from precondition
+- **During unfolding**: Temporarily gain `acc(base.length)` to read the length field
+- **After**: Permissions restored to `acc(dyn_array(base))` - the predicate is unchanged
+- **Why `unfolding...in`**: Functions must be pure (no side effects), so we use the expression form that doesn't permanently change permission state
 
 **Purpose**: Access `base.length` without permanently changing state.
 
@@ -404,9 +405,13 @@ method cons(_capacity: Int) returns (arr: Ref)
     ensures unfolding acc(dyn_array(arr)) in arr.capacity == _capacity
 ```
 
-**Purpose**: 
-- Specify properties about the array's internal state
-- Must use `unfolding` because the predicate is folded
+**Permission explanation for `unfolding acc(dyn_array(arr)) in ...`**:
+- **Context**: In postconditions, we have `acc(dyn_array(arr))` (from the other postcondition)
+- **During unfolding**: Temporarily access `arr.length` and `arr.capacity` to state their values
+- **After**: Predicate remains folded - caller receives `acc(dyn_array(arr))`
+- **Why needed**: Can't refer to `arr.length` directly in postcondition since predicate is folded
+
+**Purpose**: Specify properties about the array's internal state while keeping it encapsulated.
 
 ### Line 127: `arr := new(length, capacity, array, credits)`
 
@@ -421,10 +426,19 @@ method cons(_capacity: Int) returns (arr: Ref)
 
 ### Line 137: `fold acc(dyn_array(arr))`
 
-**Viper Syntax**:
-- `fold acc(predicate)` packages state into a predicate
-- Before fold: must have all permissions and satisfy all invariants
-- After fold: have permission to predicate, lose direct field access
+**Permission explanation**:
+- **Before fold**: Have:
+  - `acc(arr.length)`, `acc(arr.capacity)`, `acc(arr.array)`, `acc(arr.credits)` from `new()`
+  - `staticArray(arr.array)` from `alloc()`
+  - `arr.credits == 0`, so need `acc(time_credit(), 0/1)` = nothing
+- **Verification obligation**: Must prove all invariants:
+  - `0 <= arr.length` → 0 <= 0 ✓
+  - `arr.length <= arr.capacity` → 0 <= _capacity ✓ (precondition: 0 < _capacity)
+  - `0 < arr.capacity` → 0 < _capacity ✓
+  - `len(arr.array) == arr.capacity` ✓ (from alloc)
+  - `arr.credits >= 0` → 0 >= 0 ✓
+- **After fold**: Have `acc(dyn_array(arr))`, lost individual permissions
+- **Why fold here**: Postcondition requires returning `acc(dyn_array(arr))`
 
 ---
 
@@ -455,6 +469,14 @@ function arr_contents_helper(a: StaticArray, from: Int, to: Int): Seq[Int]
 - Built-in type in Viper for specification
 
 **Purpose**: Maps concrete array to abstract sequence of values.
+
+**Permission explanation for `unfolding acc(dyn_array(base)) in ...`** (lines 150-152):
+- **Before**: Have `acc(dyn_array(base))` from precondition
+- **During unfolding**: Temporarily gain:
+  - `acc(base.length)` to read length
+  - `acc(base.array)` to read array reference
+  - `staticArray(base.array)` for the helper function to read elements
+- **After**: Permissions restored to `acc(dyn_array(base))`
 
 ### Line 152: `Seq[Int]()`
 
@@ -525,10 +547,15 @@ method append_nogrow(arr: Ref, val: Int)
 
 ### Line 192: `unfold acc(dyn_array(arr))`
 
-**Viper Syntax**:
-- `unfold acc(predicate)` opens a predicate
-- After unfold: have access to fields and array elements
-- Predicate permission is "spent" - must fold again later
+**Permission explanation**:
+- **Before unfold**: Have `acc(dyn_array(arr))` from precondition, plus 3 remaining time credits
+- **After unfold**: Gain:
+  - `acc(arr.length)`, `acc(arr.capacity)`, `acc(arr.array)`, `acc(arr.credits)` - can read/write fields
+  - `staticArray(arr.array)` - can read/write array elements
+  - `acc(time_credit(), arr.credits/1)` - the saved time credits come out!
+- **Lost**: `acc(dyn_array(arr))` - must `fold` it back before returning
+- **Why needed**: Can't update `arr.length` or write to array without permission
+- **Total time credits available**: 3 (from caller) + arr.credits (from predicate)
 
 ### Line 200: `arr.credits := arr.credits + 3`
 
@@ -536,6 +563,20 @@ method append_nogrow(arr: Ref, val: Int)
 - Save 3 time credits inside the data structure
 - This is the key to amortized analysis!
 - When we grow later, we'll use these saved credits
+
+### Line 202: `fold acc(dyn_array(arr))`
+
+**Permission explanation**:
+- **Before fold**: Have:
+  - All four field permissions
+  - `staticArray(arr.array)` 
+  - `old(arr.credits) + 3` time credits (old credits from unfold + 3 from caller)
+- **Verification obligation**: Must prove:
+  - All invariants still hold (length increased by 1, still <= capacity from precondition)
+  - `arr.credits >= 0` ✓ (was >= 0, now + 3)
+  - Have `arr.credits` time credits ✓ (we have old.credits + 3)
+- **After fold**: Have `acc(dyn_array(arr))` with 3 more credits inside
+- **Why fold here**: Postcondition requires returning `acc(dyn_array(arr))`
 
 ---
 
@@ -595,6 +636,12 @@ method grow(arr: Ref) returns (new_arr: Ref)
 
 ### Line 224: `requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length`
 
+**Permission explanation for `unfolding ... in ...`**:
+- **Context**: This is in a precondition specification
+- **During unfolding**: Temporarily access `arr.credits` and `arr.length` to express the requirement
+- **Purpose**: Requires that saved credits >= number of elements to copy
+- **Why needed**: Can't refer to fields directly since predicate is folded in caller's view
+
 **Purpose**:
 - Need enough saved credits to pay for copying
 - Each iteration costs 1 credit, we copy `length` elements
@@ -605,6 +652,17 @@ method grow(arr: Ref) returns (new_arr: Ref)
 **Purpose**: 
 - Only need 1 credit from caller (constant!)
 - Remaining credits come from the data structure itself
+
+### Line 235: `unfold acc(dyn_array(arr))` (in grow method)
+
+**Permission explanation**:
+- **Before unfold**: Have `acc(dyn_array(arr))` from precondition
+- **After unfold**: Gain:
+  - `acc(arr.length)`, `acc(arr.capacity)`, `acc(arr.array)`, `acc(arr.credits)`
+  - `staticArray(arr.array)` - permissions to read old array elements
+  - `acc(time_credit(), arr.credits/1)` - the saved credits come out!
+- **Why unfold**: Need to read old values and access old array for copying
+- **Note**: We never fold back `acc(dyn_array(arr))` - the old array is discarded
 
 ### Lines 260-276: Loop Invariants
 
@@ -643,6 +701,20 @@ method grow(arr: Ref) returns (new_arr: Ref)
 
 **Purpose**: Transfer any remaining credits to the new array.
 
+### Line 291: `fold acc(dyn_array(new_arr))` (in grow method)
+
+**Permission explanation**:
+- **Before fold**: Have:
+  - `acc(new_arr.length)`, `acc(new_arr.capacity)`, `acc(new_arr.array)`, `acc(new_arr.credits)` from `new()`
+  - `staticArray(new_arr.array)` from `alloc()`
+  - `acc(time_credit(), old_arr_credits/1)` - remaining credits after loop
+- **Verification obligation**: Must prove:
+  - All invariants hold (length preserved, capacity doubled, etc.)
+  - `new_arr.credits >= 0` ✓ (remaining credits after copying)
+  - Have `new_arr.credits` time credits ✓ 
+- **After fold**: Have `acc(dyn_array(new_arr))` as required by postcondition
+- **Note**: Old array's permissions are discarded (not folded back)
+
 ---
 
 ## Lines 313-347: append Method
@@ -679,6 +751,12 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
 
 ### Line 315: `requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length`
 
+**Permission explanation for `unfolding ... in ...`**:
+- **Context**: Precondition - caller must ensure this holds
+- **During unfolding**: Temporarily peek at `arr.credits` and `arr.length`
+- **Purpose**: Ensures we have enough saved credits if grow is needed
+- **Why unfolding**: Predicate is folded; can't name fields directly
+
 **Purpose**: Need enough saved credits in case we need to grow.
 
 ### Line 316: `requires acc(time_credit(), 5/1)`
@@ -690,6 +768,26 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
 
 ### Lines 325-332: Grow Branch
 
+```viper
+        new_arr := grow(arr)
+        
+        unfold acc(dyn_array(new_arr))
+        update(new_arr.array, new_arr.length, val)
+        new_arr.length := new_arr.length + 1
+        new_arr.credits := new_arr.credits + 3
+        fold acc(dyn_array(new_arr))
+```
+
+**Permission explanation for `unfold acc(dyn_array(new_arr))`**:
+- **Before**: Have `acc(dyn_array(new_arr))` from grow's postcondition
+- **After unfold**: Gain all field permissions and array permissions to write the new element
+- **Lost**: `acc(dyn_array(new_arr))`
+
+**Permission explanation for `fold acc(dyn_array(new_arr))`**:
+- **Before fold**: Have all permissions, updated length, 3 more credits
+- **Verification**: Must prove invariants (length <= capacity, since capacity doubled and length only +1)
+- **After fold**: Have `acc(dyn_array(new_arr))` as required by postcondition
+
 **Logic**:
 - Call grow to double capacity
 - Manually append (don't call append_nogrow again)
@@ -699,6 +797,240 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
 
 **Logic**:
 - Array has room, use append_nogrow directly
+
+---
+
+## Deep Dive: The Permission System with fold/unfold/unfolding
+
+The dynamic array example demonstrates Viper's permission system extensively. Let's understand it thoroughly.
+
+### What Are Permissions?
+
+In Viper, **memory access requires permission**. You cannot read or write a field without explicitly having permission to it:
+
+```viper
+// ILLEGAL - no permission to arr.length:
+var x: Int := arr.length  // ERROR!
+
+// LEGAL - permission obtained via unfold:
+unfold acc(dyn_array(arr))
+var x: Int := arr.length  // OK - we have acc(arr.length) now
+```
+
+### Predicates as Permission Bundles
+
+The `dyn_array` predicate bundles many permissions together:
+
+```viper
+predicate dyn_array(self: Ref) {
+    acc(self.length) &&      // Permission to length field
+    acc(self.capacity) &&    // Permission to capacity field
+    acc(self.array) &&       // Permission to array field
+    acc(self.credits) &&     // Permission to credits ghost field
+    staticArray(self.array) &&  // Permissions to ALL array elements!
+    // ... invariants ...
+    acc(time_credit(), self.credits/1)  // self.credits units of time_credit!
+}
+```
+
+When you have `acc(dyn_array(arr))`:
+- You **cannot** access `arr.length` directly
+- You **know** the permission is "inside" the predicate
+- You must **unfold** to get the permissions out
+
+### What `unfold` Does
+
+**unfold exchanges predicate permission for its body permissions:**
+
+```viper
+// BEFORE unfold:
+//   Have: acc(dyn_array(arr))
+//   Can't access: arr.length, arr.capacity, arr.array, arr.credits, elements
+
+unfold acc(dyn_array(arr))
+
+// AFTER unfold:
+//   Have: acc(arr.length), acc(arr.capacity), acc(arr.array), acc(arr.credits)
+//         staticArray(arr.array)  [permissions to all elements]
+//         acc(time_credit(), arr.credits/1)  [the saved time credits!]
+//   Lost: acc(dyn_array(arr))
+//   Gain knowledge: 0 <= arr.length, arr.length <= arr.capacity, etc.
+```
+
+**Visual representation:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  acc(dyn_array(arr))                                        │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ acc(arr.length)                                         ││
+│  │ acc(arr.capacity)                                       ││
+│  │ acc(arr.array)                                          ││
+│  │ acc(arr.credits)                                        ││
+│  │ acc(loc(arr.array, 0).entry)                            ││
+│  │ acc(loc(arr.array, 1).entry)                            ││
+│  │ ...                                                     ││
+│  │ acc(time_credit()) × arr.credits                        ││
+│  │ INVARIANTS: 0 <= length <= capacity, etc.               ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+         │
+         │ unfold
+         ▼
+acc(arr.length) + acc(arr.capacity) + acc(arr.array) + acc(arr.credits)
++ staticArray(arr.array) + acc(time_credit(), arr.credits/1)
++ knowledge of invariants
+```
+
+### What `fold` Does
+
+**fold is the reverse - exchanges body permissions for predicate permission:**
+
+```viper
+// BEFORE fold:
+//   Have: all field permissions, staticArray, time credits
+//   Must PROVE: all invariants still hold
+
+fold acc(dyn_array(arr))
+
+// AFTER fold:
+//   Have: acc(dyn_array(arr))
+//   Lost: all individual field permissions
+```
+
+**Critical: fold is a verification obligation!**
+
+When you write `fold acc(dyn_array(arr))`, the verifier must prove:
+1. You have all the required permissions (fields, array elements, time credits)
+2. All invariants hold:
+   - `0 <= arr.length`
+   - `arr.length <= arr.capacity`  
+   - `0 < arr.capacity`
+   - `len(arr.array) == arr.capacity`
+   - `arr.credits >= 0`
+   - You actually hold `arr.credits` time credits
+
+If any of these fail, verification fails!
+
+### What `unfolding P in E` Does
+
+For **functions** (which must be pure/side-effect-free), we use `unfolding...in`:
+
+```viper
+function arr_length(base: Ref): Int 
+    requires acc(dyn_array(base))
+{ 
+    unfolding acc(dyn_array(base)) in base.length 
+}
+```
+
+This means:
+1. Temporarily unfold the predicate
+2. Evaluate `base.length` with the unfolded permissions
+3. Automatically re-fold (conceptually)
+
+**Why not just `unfold`?**
+- `unfold` is a **statement** with side effects (changes permission state)
+- Functions must be **pure** (no side effects)
+- `unfolding...in` is an **expression** (evaluates to a value)
+
+### Permission Flow in append_nogrow
+
+Let's trace permissions through `append_nogrow`:
+
+```viper
+method append_nogrow(arr: Ref, val: Int)
+    requires acc(dyn_array(arr))           // (1) Start with predicate
+    requires acc(time_credit(), 4/1)       // (2) Plus 4 time credits
+    ensures acc(dyn_array(arr))            // (3) Return predicate
+    ensures arr_credits(arr) == old(arr_credits(arr)) + 3  // (4) With 3 more saved
+{
+    consume_time_credit()                  // (5) Use 1 credit: now have 3
+    
+    // Have: acc(dyn_array(arr)) + 3 time credits
+    
+    unfold acc(dyn_array(arr))             // (6) UNFOLD!
+    
+    // NOW have:
+    //   acc(arr.length)
+    //   acc(arr.capacity)
+    //   acc(arr.array)
+    //   acc(arr.credits)
+    //   staticArray(arr.array)
+    //   acc(time_credit(), arr.credits/1)  <-- credits from inside predicate
+    //   + 3 time credits from (5)
+    // Total credits: arr.credits + 3
+    
+    update(arr.array, arr.length, val)     // (7) Write to array element
+    arr.length := arr.length + 1           // (8) Update length
+    arr.credits := arr.credits + 3         // (9) Record 3 more saved credits
+    
+    // Now the predicate body will include:
+    //   acc(time_credit(), (arr.credits + 3)/1)
+    // We have: arr.credits (from unfold) + 3 (from caller) = arr.credits + 3 ✓
+    
+    fold acc(dyn_array(arr))               // (10) FOLD!
+    
+    // Must prove:
+    //   - Have all field permissions? ✓
+    //   - 0 <= arr.length? ✓ (was >= 0, now +1)
+    //   - arr.length <= arr.capacity? ✓ (precondition!)
+    //   - Have arr.credits time credits? ✓ (we have old.credits + 3)
+    
+    // After fold: have acc(dyn_array(arr)) with 3 more credits inside
+}
+```
+
+### Why Permissions Matter for Dynamic Arrays
+
+1. **Array element access controlled:**
+   ```viper
+   staticArray(arr.array)  // Permission to elements 0..len-1
+   ```
+   Can only access valid indices!
+
+2. **Time credits are real permissions:**
+   ```viper
+   acc(time_credit(), arr.credits/1)  // Stored INSIDE the predicate
+   ```
+   Credits aren't just numbers - they're actual permissions we must hold.
+
+3. **Invariants verified at fold:**
+   - Every `fold acc(dyn_array(arr))` proves invariants
+   - Can't "cheat" by folding invalid state
+
+4. **Credit accounting is sound:**
+   - Credits come from `time_credit()` permissions
+   - Must actually hold credits to put them in predicate
+   - Can't fabricate credits from nothing
+
+### Permission Transfer in grow
+
+The `grow` method transfers credits from old array to new:
+
+```viper
+// Unfold old array - get its credits out
+unfold acc(dyn_array(arr))
+// Now have: acc(time_credit(), arr.credits/1)
+
+// Copy loop consumes credits
+while (pos < old_len) {
+    consume_time_credit()        // Use one credit
+    old_arr_credits := old_arr_credits - 1
+    // ... copy element ...
+}
+
+// Transfer remaining credits to new array
+new_arr.credits := old_arr_credits
+
+// Fold new array with remaining credits inside
+fold acc(dyn_array(new_arr))
+// This requires: acc(time_credit(), old_arr_credits/1)
+```
+
+The permissions flow:
+```
+old predicate → unfold → credits exposed → loop uses some → remaining → fold → new predicate
+```
 
 ---
 

@@ -378,6 +378,90 @@ method fib_recursive(n: Int) returns (res: Int)
 
 ---
 
+## Deep Dive: Viper's Permission System
+
+The Fibonacci example uses a simple permission model, but understanding it is crucial:
+
+### What Are Permissions?
+
+In Viper, you cannot access memory (fields, predicates) without **permission**. This prevents:
+- Data races in concurrent programs
+- Use-after-free bugs
+- Aliasing problems
+
+### Permission to time_credit()
+
+```viper
+requires acc(time_credit(), time_credits(n)/1)
+```
+
+**Breaking this down:**
+- `acc(resource, amount)` - "access permission to resource with given amount"
+- `time_credit()` - the predicate we want permission to
+- `time_credits(n)/1` - a fraction meaning "time_credits(n) full permissions"
+
+**Why fractions?**
+- For fields: fractions allow shared read access (e.g., 1/2 + 1/2 = 1)
+- For predicates: we can hold multiple instances
+- `k/1` means k full (100%) permissions to the predicate
+
+### Permission Flow in fib_recursive
+
+```
+Caller has: time_credits(n) permissions to time_credit()
+    |
+    v
+fib_recursive(n) starts
+    |
+    v
+consume_time_credit() takes 1 permission
+    |
+    v
+Remaining: time_credits(n) - 1 = time_credits(n-1) + time_credits(n-2)
+    |
+    +---> fib_recursive(n-1) takes time_credits(n-1) permissions
+    |
+    +---> fib_recursive(n-2) takes time_credits(n-2) permissions
+    |
+    v
+All permissions consumed (nothing returned to caller)
+```
+
+### Why No Postcondition About Permissions?
+
+```viper
+method fib_recursive(n: Int) returns (res: Int)
+    requires acc(time_credit(), time_credits(n)/1)
+    ensures res == fib(n)
+    // No "ensures acc(...)" - permissions are consumed!
+```
+
+The method consumes all time credits and doesn't return any. This models that computation "uses up" time.
+
+### Abstract vs Concrete Predicates
+
+**Abstract predicate** (no body):
+```viper
+predicate time_credit()  // Just declared, no definition
+```
+- Cannot be folded/unfolded
+- Only tracked as a permission token
+- Used for abstract resources
+
+**Concrete predicate** (with body):
+```viper
+predicate dyn_array(self: Ref) {
+    acc(self.length) && ...
+}
+```
+- CAN be folded/unfolded
+- Body specifies what permissions it contains
+- Used for data structure invariants
+
+In fibonacci.vpr, `time_credit()` is abstract - we don't care what's "inside" it, just that we have it.
+
+---
+
 ## Summary of Key Viper Concepts
 
 | Concept | Syntax | Purpose |
