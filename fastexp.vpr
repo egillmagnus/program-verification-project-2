@@ -28,12 +28,27 @@ method lemma_pow(b: Int, y: Int)
     requires y % 2 == 0 // y is even
     ensures math_pow(b, y) == math_pow(b * b, y / 2)
 
-// Lemma for odd case
+// Lemma for odd case: proves that when y is odd,
+// res * b^y == target implies (res*b) * (b*b)^(y/2) == target
 method lemma_pow_odd(b: Int, y: Int, res: Int, target: Int)
     requires 0 < y
     requires y % 2 == 1 // y is odd
     requires res * math_pow(b, y) == target
     ensures (res * b) * math_pow(b * b, y / 2) == target
+{
+    // Proof:
+    // Since y > 0, by definition: math_pow(b, y) == b * math_pow(b, y - 1)
+    // Since y is odd, y - 1 is even, so we can apply lemma_pow:
+    //   math_pow(b, y - 1) == math_pow(b * b, (y - 1) / 2)
+    // When y is odd: (y - 1) / 2 == y / 2 (integer division)
+    // Therefore: math_pow(b, y) == b * math_pow(b * b, y / 2)
+    // So: res * math_pow(b, y) == res * b * math_pow(b * b, y / 2) == target
+    
+    // Use the provided lemma for the even case (y - 1 is even)
+    lemma_pow(b, y - 1)
+    
+    // The verifier can now conclude the postcondition
+}
 // -----------------------------------------
 
 // -----------------------------------------

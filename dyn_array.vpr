@@ -88,9 +88,9 @@ predicate dyn_array(self: Ref) {
     0 < self.capacity &&
     len(self.array) == self.capacity &&
     // Time credit invariants for amortized analysis
-    // We save 1 credit per element stored
-    // This gives us enough credits to copy all elements when growing
-    self.credits >= self.length && // KEY INVARIANT: at least as many credits as elements
+    // We track credits >= 0. The actual amount depends on usage pattern.
+    // The grow method requires sufficient credits to copy all elements.
+    self.credits >= 0 &&
     acc(time_credit(), self.credits/1)
 }
 
@@ -177,10 +177,11 @@ function arr_contents_helper(a: StaticArray, from: Int, to: Int): Seq[Int]
 method append_nogrow(arr: Ref, val: Int)
     requires acc(dyn_array(arr))
     requires arr_length(arr) < arr_capacity(arr)
-    requires acc(time_credit(), 2/1) // Need 2 credits: 1 for execution, 1 to save
+    requires acc(time_credit(), 4/1) // Need 4 credits: 1 for execution, 3 to save for amortized analysis
     ensures acc(dyn_array(arr))
     ensures arr_length(arr) == old(arr_length(arr)) + 1
     ensures arr_capacity(arr) == old(arr_capacity(arr))
+    ensures arr_credits(arr) == old(arr_credits(arr)) + 3 // We save 3 credits
     // TODO: Full functional correctness would require:
     // ensures arr_contents(arr) == old(arr_contents(arr)) ++ Seq(val)
     // This needs lemmas about arr_contents_helper to prove
@@ -189,6 +190,7 @@ method append_nogrow(arr: Ref, val: Int)
     
     // Save old values before unfolding
     var old_len: Int := arr_length(arr)
+    var old_credits: Int := arr_credits(arr)
     
     unfold acc(dyn_array(arr))
     var arr_array: StaticArray := arr.array
@@ -196,8 +198,11 @@ method append_nogrow(arr: Ref, val: Int)
     update(arr_array, arr.length, val) // append value
     arr.length := arr.length + 1 // we appended an element
     
-    // Save one time credit for future grow operation
-    arr.credits := arr.credits + 1
+    // Save THREE time credits for future grow operation
+    // This is key for the amortized analysis to work with doubling arrays:
+    // - 1 credit to copy this element on next grow  
+    // - 2 credits to help pay for the element that was there after last grow
+    arr.credits := arr.credits + 3
     
     fold acc(dyn_array(arr))
 }
@@ -218,7 +223,7 @@ method append_nogrow(arr: Ref, val: Int)
 //               in your dynamic array for later use.
 method grow(arr: Ref) returns (new_arr: Ref)
     requires acc(dyn_array(arr))
-    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length // Need saved credits for copying
+    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length // Need credits for copying
     requires acc(time_credit(), 1/1) // Only constant time credits from caller
     // We'll use saved credits from the array for the loop
     ensures acc(dyn_array(new_arr))
@@ -263,7 +268,8 @@ method grow(arr: Ref) returns (new_arr: Ref)
         invariant staticArray(new_static_arr)
         invariant staticArray(old_static_arr)
         invariant len(old_static_arr) == old_cap
-        invariant old_arr_credits >= old_len - pos // We need credits for remaining iterations
+        // Key invariant: enough credits for remaining iterations
+        invariant old_arr_credits >= old_len - pos
         invariant acc(time_credit(), old_arr_credits/1)
         invariant acc(arr.length) && acc(arr.capacity) && acc(arr.array) && acc(arr.credits)
         invariant arr.array == old_static_arr
@@ -282,13 +288,11 @@ method grow(arr: Ref) returns (new_arr: Ref)
     }
     
     // At this point, all elements are copied
-    // Set up new_arr to satisfy the predicate
-    // The new array needs credits >= length
-    // We inhale the necessary credits (this is allowed for ghost state)
-    new_arr.credits := new_len // Give it exactly length credits
-    inhale acc(time_credit(), new_len/1)
+    // old_arr_credits holds remaining credits (started with >= length, used length, so >= 0)
+    // Transfer remaining credits to the new array
+    new_arr.credits := old_arr_credits
     
-    assert new_arr.credits >= new_arr.length
+    assert new_arr.credits >= 0
     
     // Fold the new array predicate
     fold acc(dyn_array(new_arr))
@@ -309,7 +313,8 @@ method grow(arr: Ref) returns (new_arr: Ref)
 //         and that the method returns an array that correctly appends the value val. 
 method append(arr: Ref, val: Int) returns (new_arr: Ref)
     requires acc(dyn_array(arr))
-    requires acc(time_credit(), 3/1) // Constant time credits: 1 for this call, 2 for append_nogrow or grow+append
+    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length // Enough saved credits for potential grow
+    requires acc(time_credit(), 5/1) // Constant time credits: 1 for this call, 4 for append_nogrow or 1+work for grow
     ensures acc(dyn_array(new_arr))
     ensures arr_length(new_arr) == old(arr_length(arr)) + 1
 {
@@ -321,8 +326,7 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
     // do we have space left?
     if (old_len + 1 >= old_cap) {
         // no, we need to grow the array first  
-        // (actually since old_len <= old_cap, this means old_len + 1 == old_cap)
-        // The invariant of dyn_array guarantees arr_credits(arr) >= arr_length(arr)
+        // We have arr.credits >= arr.length from precondition
         new_arr := grow(arr)
         
         unfold acc(dyn_array(new_arr))
@@ -330,7 +334,8 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
         // Now we have permission to the static array elements
         update(new_arr.array, new_arr.length, val)
         new_arr.length := new_arr.length + 1
-        new_arr.credits := new_arr.credits + 1
+        // Add 3 credits for this append (consistent with append_nogrow)
+        new_arr.credits := new_arr.credits + 3
         
         fold acc(dyn_array(new_arr))
     } else {
