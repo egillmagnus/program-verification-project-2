@@ -78,18 +78,12 @@ define alloc(a, l) {
 //         such as time credits needed for amortized analysis.
 //         Feel free to add acessor functions to simplify fold-unfold reasoning.
 predicate dyn_array(self: Ref) {
-    // Permissions to fields
     acc(self.length) && acc(self.capacity) && acc(self.array) && acc(self.credits) &&
-    // Permissions to all array elements
     staticArray(self.array) &&
-    // Data structure invariants
     0 <= self.length &&
     self.length <= self.capacity &&
     0 < self.capacity &&
     len(self.array) == self.capacity &&
-    // Time credit invariants for amortized analysis
-    // We track credits >= 0. The actual amount depends on usage pattern.
-    // The grow method requires sufficient credits to copy all elements.
     self.credits >= 0 &&
     acc(time_credit(), self.credits/1)
 }
@@ -127,16 +121,13 @@ method cons(_capacity: Int) returns (arr: Ref)
 {
     consume_time_credit() // every method call must consume a time credit
     
-    // Allocate new object
     arr := new(length, capacity, array, credits)
     arr.length := 0
     arr.capacity := _capacity
     arr.credits := 0
     
-    // Allocate the static array
     alloc(arr.array, _capacity)
     
-    // Fold the predicate
     fold acc(dyn_array(arr))
 }
 // -----------------------------------------
@@ -154,7 +145,6 @@ function arr_contents(base: Ref): Seq[Int]
         (base.length == 0 ? Seq[Int]() : arr_contents_helper(base.array, 0, base.length))
 }
 
-// Helper function to build sequence from static array
 function arr_contents_helper(a: StaticArray, from: Int, to: Int): Seq[Int]
     requires 0 <= from && from <= to && to <= len(a)
     requires forall i: Int :: {loc(a, i)} from <= i && i < to ==> acc(loc(a, i).entry)
@@ -177,18 +167,14 @@ function arr_contents_helper(a: StaticArray, from: Int, to: Int): Seq[Int]
 method append_nogrow(arr: Ref, val: Int)
     requires acc(dyn_array(arr))
     requires arr_length(arr) < arr_capacity(arr)
-    requires acc(time_credit(), 4/1) // Need 4 credits: 1 for execution, 3 to save for amortized analysis
+    requires acc(time_credit(), 4/1)
     ensures acc(dyn_array(arr))
     ensures arr_length(arr) == old(arr_length(arr)) + 1
     ensures arr_capacity(arr) == old(arr_capacity(arr))
-    ensures arr_credits(arr) == old(arr_credits(arr)) + 3 // We save 3 credits
-    // TODO: Full functional correctness would require:
-    // ensures arr_contents(arr) == old(arr_contents(arr)) ++ Seq(val)
-    // This needs lemmas about arr_contents_helper to prove
+    ensures arr_credits(arr) == old(arr_credits(arr)) + 3
 {
     consume_time_credit() 
     
-    // Save old values before unfolding
     var old_len: Int := arr_length(arr)
     var old_credits: Int := arr_credits(arr)
     
@@ -198,10 +184,6 @@ method append_nogrow(arr: Ref, val: Int)
     update(arr_array, arr.length, val) // append value
     arr.length := arr.length + 1 // we appended an element
     
-    // Save THREE time credits for future grow operation
-    // This is key for the amortized analysis to work with doubling arrays:
-    // - 1 credit to copy this element on next grow  
-    // - 2 credits to help pay for the element that was there after last grow
     arr.credits := arr.credits + 3
     
     fold acc(dyn_array(arr))
@@ -223,19 +205,14 @@ method append_nogrow(arr: Ref, val: Int)
 //               in your dynamic array for later use.
 method grow(arr: Ref) returns (new_arr: Ref)
     requires acc(dyn_array(arr))
-    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length // Need credits for copying
-    requires acc(time_credit(), 1/1) // Only constant time credits from caller
-    // We'll use saved credits from the array for the loop
+    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length
+    requires acc(time_credit(), 1/1)
     ensures acc(dyn_array(new_arr))
     ensures arr_length(new_arr) == old(arr_length(arr))
     ensures arr_capacity(new_arr) == 2 * old(arr_capacity(arr))
-    // TODO: Full functional correctness would require:
-    // ensures arr_contents(new_arr) == old(arr_contents(arr))
-    // This needs lemmas about arr_contents_helper to prove copied elements match
 {
     consume_time_credit() // we must spend a credit for the call
     
-    // Save old values
     var old_contents: Seq[Int] := arr_contents(arr)
     var old_len: Int := arr_length(arr)
     var old_cap: Int := arr_capacity(arr)
@@ -246,10 +223,9 @@ method grow(arr: Ref) returns (new_arr: Ref)
     new_arr := new(length, capacity, array, credits)
     new_arr.capacity := 2 * arr.capacity
     new_arr.length := arr.length
-    new_arr.credits := 0  // Initialize credits for new array
+    new_arr.credits := 0
     alloc(new_arr.array, new_arr.capacity)
     
-    // Ghost variables for the loop
     var new_len: Int := new_arr.length
     var new_cap: Int := new_arr.capacity
     var new_static_arr: StaticArray := new_arr.array
@@ -268,18 +244,15 @@ method grow(arr: Ref) returns (new_arr: Ref)
         invariant staticArray(new_static_arr)
         invariant staticArray(old_static_arr)
         invariant len(old_static_arr) == old_cap
-        // Key invariant: enough credits for remaining iterations
         invariant old_arr_credits >= old_len - pos
         invariant acc(time_credit(), old_arr_credits/1)
         invariant acc(arr.length) && acc(arr.capacity) && acc(arr.array) && acc(arr.credits)
         invariant arr.array == old_static_arr
-        // Elements copied so far match exactly
         invariant forall i: Int :: {loc(new_static_arr, i)} 0 <= i && i < pos ==> 
             lookup(new_static_arr, i) == lookup(old_static_arr, i)
     {
         consume_time_credit() // we must spend a credit for every iteration
         
-        // Take a credit from old_arr_credits
         old_arr_credits := old_arr_credits - 1
 
         // copy one element 
@@ -287,18 +260,11 @@ method grow(arr: Ref) returns (new_arr: Ref)
         pos := pos + 1
     }
     
-    // At this point, all elements are copied
-    // old_arr_credits holds remaining credits (started with >= length, used length, so >= 0)
-    // Transfer remaining credits to the new array
     new_arr.credits := old_arr_credits
     
     assert new_arr.credits >= 0
     
-    // Fold the new array predicate
     fold acc(dyn_array(new_arr))
-    
-    // Note: Full functional correctness (arr_contents preservation) would require
-    // lemmas about arr_contents_helper to prove the copied elements match
 }
 // -----------------------------------------
 
@@ -313,8 +279,8 @@ method grow(arr: Ref) returns (new_arr: Ref)
 //         and that the method returns an array that correctly appends the value val. 
 method append(arr: Ref, val: Int) returns (new_arr: Ref)
     requires acc(dyn_array(arr))
-    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length // Enough saved credits for potential grow
-    requires acc(time_credit(), 5/1) // Constant time credits: 1 for this call, 4 for append_nogrow or 1+work for grow
+    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length
+    requires acc(time_credit(), 5/1)
     ensures acc(dyn_array(new_arr))
     ensures arr_length(new_arr) == old(arr_length(arr)) + 1
 {
@@ -325,22 +291,18 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
 
     // do we have space left?
     if (old_len + 1 >= old_cap) {
-        // no, we need to grow the array first  
-        // We have arr.credits >= arr.length from precondition
+        // no, we need to grow the array first
         new_arr := grow(arr)
         
         unfold acc(dyn_array(new_arr))
         
-        // Now we have permission to the static array elements
         update(new_arr.array, new_arr.length, val)
         new_arr.length := new_arr.length + 1
-        // Add 3 credits for this append (consistent with append_nogrow)
         new_arr.credits := new_arr.credits + 3
         
         fold acc(dyn_array(new_arr))
     } else {
         // yes, we can append without growing the array first
-        // We know old_len + 1 < old_cap
         new_arr := arr
         append_nogrow(new_arr, val)
     }   

@@ -28,33 +28,17 @@ method lemma_pow(b: Int, y: Int)
     requires y % 2 == 0 // y is even
     ensures math_pow(b, y) == math_pow(b * b, y / 2)
 
-// Lemma for odd case: proves that when y is odd,
-// res * b^y == target implies (res*b) * (b*b)^(y/2) == target
 method lemma_pow_odd(b: Int, y: Int, res: Int, target: Int)
     requires 0 < y
     requires y % 2 == 1 // y is odd
     requires res * math_pow(b, y) == target
     ensures (res * b) * math_pow(b * b, y / 2) == target
 {
-    // Proof:
-    // Since y > 0, by definition: math_pow(b, y) == b * math_pow(b, y - 1)
-    // Since y is odd, y - 1 is even, so we can apply lemma_pow:
-    //   math_pow(b, y - 1) == math_pow(b * b, (y - 1) / 2)
-    // When y is odd: (y - 1) / 2 == y / 2 (integer division)
-    // Therefore: math_pow(b, y) == b * math_pow(b * b, y / 2)
-    // So: res * math_pow(b, y) == res * b * math_pow(b * b, y / 2) == target
-    
-    // Use the provided lemma for the even case (y - 1 is even)
     lemma_pow(b, y - 1)
-    
-    // The verifier can now conclude the postcondition
 }
 // -----------------------------------------
 
 // -----------------------------------------
-// Helper function to calculate the number of iterations needed
-// This equals floor(log2(e)) + 1, which is the number of times
-// we can divide e by 2 until we reach 0
 function iterations_needed(e: Int): Int
     requires 0 < e
     ensures result >= 1
@@ -75,8 +59,6 @@ function iterations_needed(e: Int): Int
 method fast_pow(n: Int, e: Int)
     returns (res: Int)
     requires 0 < e
-    // TODO: verify; add time credits and runtime bounds
-    // Time credits: 1 for method call + iterations_needed(e) for loop iterations
     requires acc(time_credit(), (1 + iterations_needed(e))/1)
     ensures res == math_pow(n, e)
 {
@@ -87,21 +69,16 @@ method fast_pow(n: Int, e: Int)
     res := 1
 
     while (y > 0)
-        // Loop invariant: the product res * b^y equals n^e (functional correctness)
         invariant 0 <= y
         invariant res * math_pow(b, y) == math_pow(n, e)
-        // Time credit invariant: we have enough credits for remaining iterations
-        // When y > 0, we need iterations_needed(y) credits; when y == 0, we need none
         invariant y > 0 ==> acc(time_credit(), iterations_needed(y)/1)
     {
         consume_time_credit() // we must spend a credit for every loop iteration
         
         if (y % 2 == 1) {
-            // Odd case
             lemma_pow_odd(b, y, res, math_pow(n, e))
             res := res * b
         } else {
-            // Even case
             lemma_pow(b, y)
         }
         
@@ -109,24 +86,4 @@ method fast_pow(n: Int, e: Int)
         b := b * b
     }
 }
-// -----------------------------------------
-
-// -----------------------------------------
-// PROOF THAT THE BOUND IS TIGHT
-// The runtime bound 1 + iterations_needed(e) is tight because:
-// 1. We always execute the method call: 1 credit
-// 2. The loop runs exactly iterations_needed(e) times because:
-//    - Each iteration halves y (via y := y / 2)
-//    - We continue until y becomes 0
-//    - iterations_needed(e) = floor(log2(e)) + 1 is the exact number of halvings
-// 3. Examples:
-//    - e=1: iterations_needed(1) = 1, loop runs 1 time (y: 1→0)
-//    - e=2: iterations_needed(2) = 2, loop runs 2 times (y: 2→1→0)
-//    - e=3: iterations_needed(3) = 2, loop runs 2 times (y: 3→1→0)
-//    - e=4: iterations_needed(4) = 3, loop runs 3 times (y: 4→2→1→0)
-//    - e=7: iterations_needed(7) = 3, loop runs 3 times (y: 7→3→1→0)
-//    - e=8: iterations_needed(8) = 4, loop runs 4 times (y: 8→4→2→1→0)
-// 4. This is optimal: O(log e) is the best possible for exponentiation by squaring
-// 5. Using fewer credits would fail verification - the loop invariant on time_credit
-//    ensures we have exactly iterations_needed(y) credits at the start of each iteration
 // -----------------------------------------
