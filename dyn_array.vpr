@@ -167,11 +167,11 @@ function arr_contents_helper(a: StaticArray, from: Int, to: Int): Seq[Int]
 method append_nogrow(arr: Ref, val: Int)
     requires acc(dyn_array(arr))
     requires arr_length(arr) < arr_capacity(arr)
-    requires acc(time_credit(), 4/1)
+    requires acc(time_credit(), 3/1)
     ensures acc(dyn_array(arr))
     ensures arr_length(arr) == old(arr_length(arr)) + 1
     ensures arr_capacity(arr) == old(arr_capacity(arr))
-    ensures arr_credits(arr) == old(arr_credits(arr)) + 3
+    ensures arr_credits(arr) == old(arr_credits(arr)) + 2
 {
     consume_time_credit() 
     
@@ -184,7 +184,7 @@ method append_nogrow(arr: Ref, val: Int)
     update(arr_array, arr.length, val) // append value
     arr.length := arr.length + 1 // we appended an element
     
-    arr.credits := arr.credits + 3
+    arr.credits := arr.credits + 2
     
     fold acc(dyn_array(arr))
 }
@@ -280,7 +280,7 @@ method grow(arr: Ref) returns (new_arr: Ref)
 method append(arr: Ref, val: Int) returns (new_arr: Ref)
     requires acc(dyn_array(arr))
     requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length
-    requires acc(time_credit(), 5/1)
+    requires acc(time_credit(), 4/1)
     ensures acc(dyn_array(new_arr))
     ensures arr_length(new_arr) == old(arr_length(arr)) + 1
 {
@@ -298,7 +298,7 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
         
         update(new_arr.array, new_arr.length, val)
         new_arr.length := new_arr.length + 1
-        new_arr.credits := new_arr.credits + 3
+        new_arr.credits := new_arr.credits + 2
         
         fold acc(dyn_array(new_arr))
     } else {
