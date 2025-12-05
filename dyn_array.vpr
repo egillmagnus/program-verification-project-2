@@ -17,7 +17,7 @@ method consume_time_credit() //
 // You can add ghost fields if you want.
 
 // Fields of dynamic array objects
-field length: Int // how many elements are currently stored in the array
+field n: Int // how many elements are currently stored in the array
 field capacity: Int // how many elements can be stored in the array
 field array: StaticArray // the static array storing the actual elements, see below
 field credits: Int // ghost field: saved time credits for amortized analysis
@@ -41,7 +41,7 @@ domain StaticArray {
         first(loc(a, i)) == a && second(loc(a, i)) == i
     }
 
-    axiom length_nonneg {
+    axiom n_nonneg {
         forall a: StaticArray :: len(a) >= 0
     }
 }
@@ -63,7 +63,7 @@ define update(a, i, e) {
 define staticArray(a)
     (forall i: Int :: {loc(a, i)}  0 <= i && i < len(a) ==> acc(loc(a, i).entry)) 
 
-// Allocate a new static array a of length l
+// Allocate a new static array a of n l
 // You can (reasonably) use this to create a new array
 // Warning: do not use twice with the same arguments.
 define alloc(a, l) {
@@ -78,10 +78,10 @@ define alloc(a, l) {
 //         such as time credits needed for amortized analysis.
 //         Feel free to add acessor functions to simplify fold-unfold reasoning.
 predicate dyn_array(self: Ref) {
-    acc(self.length) && acc(self.capacity) && acc(self.array) && acc(self.credits) &&
+    acc(self.n) && acc(self.capacity) && acc(self.array) && acc(self.credits) &&
     staticArray(self.array) &&
-    0 <= self.length &&
-    self.length <= self.capacity &&
+    0 <= self.n &&
+    self.n <= self.capacity &&
     0 < self.capacity &&
     len(self.array) == self.capacity &&
     self.credits >= 0 &&
@@ -90,9 +90,9 @@ predicate dyn_array(self: Ref) {
 
 
 // Accessor functions for commonly needed fields
-function arr_length(base: Ref): Int 
+function arr_n(base: Ref): Int 
     requires acc(dyn_array(base))
-{ unfolding acc(dyn_array(base)) in base.length }
+{ unfolding acc(dyn_array(base)) in base.n }
 
 function arr_capacity(base: Ref): Int
     requires acc(dyn_array(base))
@@ -107,7 +107,7 @@ function arr_credits(base: Ref): Int
 
 
 // -----------------------------------------
-// TASK 3.2: Implement a proven-correct method that creates a new dynamic array of length 0
+// TASK 3.2: Implement a proven-correct method that creates a new dynamic array of n 0
 //         with the given capacity.
 //         You should at least prove that your method indeed creates a dynamic array of the 
 //         given capacity that satisfies all data structure invariants of dynamic arrays.
@@ -116,13 +116,13 @@ method cons(_capacity: Int) returns (arr: Ref)
     requires 0 < _capacity
     requires acc(time_credit(), 1/1)
     ensures acc(dyn_array(arr))
-    ensures unfolding acc(dyn_array(arr)) in arr.length == 0
+    ensures unfolding acc(dyn_array(arr)) in arr.n == 0
     ensures unfolding acc(dyn_array(arr)) in arr.capacity == _capacity
 {
     consume_time_credit() // every method call must consume a time credit
     
-    arr := new(length, capacity, array, credits)
-    arr.length := 0
+    arr := new(n, capacity, array, credits)
+    arr.n := 0
     arr.capacity := _capacity
     arr.credits := 0
     
@@ -139,18 +139,20 @@ method cons(_capacity: Int) returns (arr: Ref)
 //         mathematical sequence of values stored in its elements.
 // For other tasks, you might have to prove additional properties about the abstraction.
 function arr_contents(base: Ref): Seq[Int]
-    requires acc(dyn_array(base))
+    requires dyn_array(base)
 {
-    unfolding acc(dyn_array(base)) in 
-        (base.length == 0 ? Seq[Int]() : arr_contents_helper(base.array, 0, base.length))
+    unfolding dyn_array(base) in 
+        (base.n == 0 ? Seq[Int]() : arr_contents_helper(base.array, base.n))
 }
 
-function arr_contents_helper(a: StaticArray, from: Int, to: Int): Seq[Int]
-    requires 0 <= from && from <= to && to <= len(a)
-    requires forall i: Int :: {loc(a, i)} from <= i && i < to ==> acc(loc(a, i).entry)
+function arr_contents_helper(a: StaticArray, N: Int): Seq[Int]
+    requires 0 <= N && N <= len(a)
+    requires forall i: Int :: 0<= i && i < len(a) ==> acc(loc(a, i).entry)
+    ensures |result| == N
+    ensures forall i: Int :: 0 <= i < N ==> result[i] == lookup(a, i)
 {
-    from == to ? Seq[Int]() : 
-        arr_contents_helper(a, from, to - 1) ++ Seq(lookup(a, to - 1))
+    N ==  0 ? Seq[Int]() : 
+        arr_contents_helper(a, N - 1) ++ Seq(lookup(a, N - 1))
 }
 // -----------------------------------------
 
@@ -166,23 +168,24 @@ function arr_contents_helper(a: StaticArray, from: Int, to: Int): Seq[Int]
 //         You can add specifications and ghost code, but do not modify the production code
 method append_nogrow(arr: Ref, val: Int)
     requires acc(dyn_array(arr))
-    requires arr_length(arr) < arr_capacity(arr)
+    requires arr_n(arr) < arr_capacity(arr)
     requires acc(time_credit(), 3/1)
     ensures acc(dyn_array(arr))
-    ensures arr_length(arr) == old(arr_length(arr)) + 1
+    ensures arr_n(arr) == old(arr_n(arr)) + 1
     ensures arr_capacity(arr) == old(arr_capacity(arr))
     ensures arr_credits(arr) == old(arr_credits(arr)) + 2
+    ensures arr_contents(arr) == old(arr_contents(arr)) ++ Seq(val)
 {
     consume_time_credit() 
     
-    var old_len: Int := arr_length(arr)
+    var old_len: Int := arr_n(arr)
     var old_credits: Int := arr_credits(arr)
     
     unfold acc(dyn_array(arr))
     var arr_array: StaticArray := arr.array
     
-    update(arr_array, arr.length, val) // append value
-    arr.length := arr.length + 1 // we appended an element
+    update(arr_array, arr.n, val) // append value
+    arr.n := arr.n + 1 // we appended an element
     
     arr.credits := arr.credits + 2
     
@@ -205,28 +208,29 @@ method append_nogrow(arr: Ref, val: Int)
 //               in your dynamic array for later use.
 method grow(arr: Ref) returns (new_arr: Ref)
     requires acc(dyn_array(arr))
-    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length
+    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.n
     requires acc(time_credit(), 1/1)
     ensures acc(dyn_array(new_arr))
-    ensures arr_length(new_arr) == old(arr_length(arr))
+    ensures arr_n(new_arr) == old(arr_n(arr))
     ensures arr_capacity(new_arr) == 2 * old(arr_capacity(arr))
+    ensures arr_contents(new_arr) == old(arr_contents(arr))
 {
     consume_time_credit() // we must spend a credit for the call
     
     var old_contents: Seq[Int] := arr_contents(arr)
-    var old_len: Int := arr_length(arr)
+    var old_len: Int := arr_n(arr)
     var old_cap: Int := arr_capacity(arr)
     
     unfold acc(dyn_array(arr))
 
     // create a new dynamic array with twice the capacity
-    new_arr := new(length, capacity, array, credits)
+    new_arr := new(n, capacity, array, credits)
     new_arr.capacity := 2 * arr.capacity
-    new_arr.length := arr.length
+    new_arr.n := arr.n
     new_arr.credits := 0
     alloc(new_arr.array, new_arr.capacity)
     
-    var new_len: Int := new_arr.length
+    var new_len: Int := new_arr.n
     var new_cap: Int := new_arr.capacity
     var new_static_arr: StaticArray := new_arr.array
     var old_static_arr: StaticArray := arr.array
@@ -246,10 +250,13 @@ method grow(arr: Ref) returns (new_arr: Ref)
         invariant len(old_static_arr) == old_cap
         invariant old_arr_credits >= old_len - pos
         invariant acc(time_credit(), old_arr_credits/1)
-        invariant acc(arr.length) && acc(arr.capacity) && acc(arr.array) && acc(arr.credits)
+        invariant acc(arr.n) && acc(arr.capacity) && acc(arr.array) && acc(arr.credits)
         invariant arr.array == old_static_arr
+        invariant arr.n == old_len
         invariant forall i: Int :: {loc(new_static_arr, i)} 0 <= i && i < pos ==> 
             lookup(new_static_arr, i) == lookup(old_static_arr, i)
+        invariant arr_contents_helper(new_static_arr, pos) == arr_contents_helper(old_static_arr, pos)
+        invariant arr_contents_helper(arr.array, arr.n) == old_contents
     {
         consume_time_credit() // we must spend a credit for every iteration
         
@@ -260,9 +267,12 @@ method grow(arr: Ref) returns (new_arr: Ref)
         pos := pos + 1
     }
     
+    // At loop end: pos == old_len, all elements copied
     new_arr.credits := old_arr_credits
     
     assert new_arr.credits >= 0
+    assert arr_contents_helper(new_arr.array, new_arr.n) == arr_contents_helper(arr.array, arr.n)
+    assert arr_contents_helper(new_arr.array, new_arr.n) == old_contents
     
     fold acc(dyn_array(new_arr))
 }
@@ -279,14 +289,15 @@ method grow(arr: Ref) returns (new_arr: Ref)
 //         and that the method returns an array that correctly appends the value val. 
 method append(arr: Ref, val: Int) returns (new_arr: Ref)
     requires acc(dyn_array(arr))
-    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.length
+    requires unfolding acc(dyn_array(arr)) in arr.credits >= arr.n
     requires acc(time_credit(), 4/1)
     ensures acc(dyn_array(new_arr))
-    ensures arr_length(new_arr) == old(arr_length(arr)) + 1
+    ensures arr_n(new_arr) == old(arr_n(arr)) + 1
+    ensures arr_contents(new_arr) == old(arr_contents(arr)) ++ Seq(val)
 {
     consume_time_credit() // we must spend a time credit for the call
     
-    var old_len: Int := arr_length(arr)
+    var old_len: Int := arr_n(arr)
     var old_cap: Int := arr_capacity(arr)
 
     // do we have space left?
@@ -296,8 +307,8 @@ method append(arr: Ref, val: Int) returns (new_arr: Ref)
         
         unfold acc(dyn_array(new_arr))
         
-        update(new_arr.array, new_arr.length, val)
-        new_arr.length := new_arr.length + 1
+        update(new_arr.array, new_arr.n, val)
+        new_arr.n := new_arr.n + 1
         new_arr.credits := new_arr.credits + 2
         
         fold acc(dyn_array(new_arr))
