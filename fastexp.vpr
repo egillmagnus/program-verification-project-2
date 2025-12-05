@@ -16,6 +16,7 @@ method consume_time_credit() //
 // Mathematical definition of n^e
 function math_pow(n: Int, e: Int): Int
     requires 0 <= e
+    decreases e
 {
     e == 0 ? 1 : n * math_pow(n, e - 1)
 }
@@ -42,6 +43,7 @@ method lemma_pow_odd(b: Int, y: Int, res: Int, target: Int)
 function iterations_needed(e: Int): Int
     requires 0 < e
     ensures result >= 1
+    decreases e
 {
     e == 1 ? 1 : 1 + iterations_needed(e / 2)
 }

@@ -24,6 +24,7 @@ method consume_time_credit() //
 // -----------------------------------------
 function fib(n: Int): Int
     requires n >= 0
+    decreases n
 {
     n == 0 ? 0 : (n == 1 ? 1 : fib(n - 1) + fib(n - 2))
 }
@@ -31,6 +32,7 @@ function fib(n: Int): Int
 function time_credits(n: Int): Int
     requires n >= 0
     ensures result >= 1
+    decreases n
 {
     n == 0 || n == 1 ? 1 : 1 + time_credits(n - 1) + time_credits(n - 2)
 }
